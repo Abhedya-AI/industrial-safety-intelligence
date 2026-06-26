@@ -1,0 +1,1 @@
+# industrial-safety-intelligence
