@@ -133,6 +133,34 @@ You can test the ingestion and retrieval flow directly from the Swagger UI:
 3. **Retrieve and Verify**:
    Use `GET /api/v1/readings/latest/{sensor_id}` or `GET /api/v1/readings/{sensor_id}` to fetch the ingested records.
 
+---
+
+### Swagger API Directory
+
+The following endpoints are currently available in the Swagger interface (`/docs`):
+
+#### 🩺 Health Checks
+* **`GET /api/v1/health`** — Liveness check (checks if service is running).
+* **`GET /api/v1/health/ready`** — Readiness check (verifies database connection).
+
+#### 📟 Sensors
+* **`GET /api/v1/sensors/current`** — Retrieves current reading, trend, thresholds, health, and anomaly details for all sensors.
+* **`GET /api/v1/sensors/{sensor_id}/history`** — Detailed sensor history including stats, readings range, anomalies, and forecasting.
+* **`GET /api/v1/sensors`** — Paginated list of registered sensors (supports filtering by `sensor_type`, `status`, and `zone_id`).
+* **`POST /api/v1/sensors`** — Register a new sensor with metadata (threshold bounds, manufacturer, model, units).
+* **`GET /api/v1/sensors/{sensor_id}`** — Fetch a single sensor metadata by its business ID.
+* **`PUT /api/v1/sensors/{sensor_id}`** — Update an existing sensor's metadata.
+* **`DELETE /api/v1/sensors/{sensor_id}`** — Unregister/delete a sensor.
+
+#### 📊 Readings (Telemetry)
+* **`POST /api/v1/readings/ingest`** — Ingest a single reading with validations (sensor status active, values within limits, unique timestamp).
+* **`POST /api/v1/readings/ingest/batch`** — Atomically ingest multiple readings (all-or-nothing validation).
+* **`GET /api/v1/readings/latest/{sensor_id}`** — Get the most recent reading for a sensor.
+* **`GET /api/v1/readings/{sensor_id}`** — Query historical readings for a sensor with limit and time range filters.
+* **`GET /api/v1/readings/{sensor_id}/stats`** — Query statistics (mean, std dev, min, max, count) for a sensor's readings over a time window.
+
+*(Note: Alerts, Anomalies, and Thresholds management routes are currently stubbed for downstream integrations).*
+
 ### Verification
 
 To run the verification test suite:
