@@ -1,1 +1,109 @@
-# industrial-safety-intelligence
+# Industrial Safety Intelligence Platform
+
+A production-grade FastAPI backend for the ET AI Hackathon SentinelAI Industrial Safety Intelligence Platform. This monolith hosts modules for Sensor Intelligence, Risk Prediction, Compound Risk, and Hazard Propagation.
+
+## Repository Structure
+
+```
+industrial-safety-intelligence/
+├── alembic/                      # Database migrations
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
+│
+├── app/                          # Main application code
+│   ├── main.py                   # App startup & lifecycle entry point
+│   │
+│   ├── core/                     # Core cross-cutting infrastructure
+│   │   ├── settings.py           # Configuration environment settings
+│   │   ├── logging.py            # Log configurations
+│   │   ├── dependencies.py       # Dependency Injection container
+│   │   ├── middleware.py         # Middlewares (CORS, Logging, Error Handlers)
+│   │   └── security.py           # Auth and security helpers
+│   │
+│   ├── sensor_intelligence/      # Sensor Intelligence Module
+│   │   ├── api/                  # Route handlers
+│   │   ├── services/             # Use cases and domain logic
+│   │   ├── repositories/         # Ports (interfaces) and concrete adapters
+│   │   ├── models/               # SQLAlchemy ORM models
+│   │   ├── schemas/              # Pydantic schemas (Request/Response validation)
+│   │   ├── domain/               # Domain Entities & Value Objects
+│   │   ├── validators/           # Custom validation utilities
+│   │   ├── preprocessing/        # Input preprocessing logic
+│   │   └── anomaly_detection/    # Anomaly models and scoring algorithms
+│   │
+│   ├── risk_prediction/          # Risk Prediction Module
+│   │   ├── api/
+│   │   ├── services/
+│   │   ├── models/
+│   │   └── ml/
+│   │
+│   ├── compound_risk/            # Compound Risk Module
+│   │   ├── api/
+│   │   ├── services/
+│   │   └── rules/
+│   │
+│   ├── hazard_propagation/       # Hazard Propagation Module
+│   │   ├── api/
+│   │   ├── services/
+│   │   └── graph/
+│   │
+│   └── shared/                   # Infrastructure shared across all modules
+│       ├── database/             # Database async connection & Base models
+│       ├── exceptions/           # Global domain-specific exceptions
+│       ├── dto/                  # Shared data transfer objects
+│       ├── utils/                # General utility helper functions
+│       └── constants/            # Common domain constants
+│
+├── training/                     # ML training pipelines
+│   ├── dataset_loader.py
+│   ├── preprocessing.py
+│   ├── feature_engineering.py
+│   ├── train_model.py
+│   └── evaluate.py
+│
+├── datasets/                     # Local data storage for ML datasets
+├── models/                       # Stored model weights/checkpoints
+│
+├── tests/                        # Comprehensive test suite
+│   ├── conftest.py
+│   ├── unit/                     # Business logic unit tests
+│   ├── integration/              # DB repository integration tests
+│   └── e2e/                      # HTTP endpoint request tests
+│
+├── Dockerfile                    # Production Docker configuration
+├── docker-compose.yml            # Local development orchestration
+├── requirements.txt              # Pinned python dependencies
+├── pyproject.toml                # Project configurations & lint settings
+└── README.md                     # Documentation
+```
+
+## Getting Started
+
+### Local Setup
+
+1. **Set Up Python Virtual Environment**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+2. **Configure Environment Variables**
+   Copy the example environment settings to your local configuration:
+   ```bash
+   cp .env.example .env
+   ```
+
+3. **Running the Application**
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+   The interactive Swagger documentation will be available at: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### Verification
+
+To run the verification test suite:
+```bash
+python -m pytest tests/ -v
+```

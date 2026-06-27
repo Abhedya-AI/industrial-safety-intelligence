@@ -1,0 +1,1 @@
+# Sensor Intelligence API endpoints
