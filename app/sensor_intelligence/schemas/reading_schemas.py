@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -20,7 +20,7 @@ class ReadingCreateRequest(BaseModel):
     confidence: float = Field(
         100.0, ge=0, le=100, description="Reading confidence percentage"
     )
-    metadata: dict[str, Any] | None = Field(
+    metadata: Optional[Dict[str, Any]] = Field(
         None, description="Additional payload metadata"
     )
 
@@ -46,10 +46,10 @@ class BatchReadingCreateRequest(BaseModel):
 
 
 class ReadingResponse(BaseModel):
-    """Response body for a sensor reading."""
+    """Response body for a persisted sensor reading."""
 
-    id: UUID
-    sensor_id: UUID
+    id: str
+    sensor_id: str
     value: float
     timestamp: datetime
     confidence: float
@@ -61,7 +61,7 @@ class ReadingResponse(BaseModel):
 class ReadingStatsResponse(BaseModel):
     """Aggregated statistics for sensor readings."""
 
-    sensor_id: UUID
+    sensor_id: str
     mean: float
     std_dev: float
     min_value: float
@@ -74,5 +74,13 @@ class ReadingStatsResponse(BaseModel):
 class BatchReadingResponse(BaseModel):
     """Response body for batch ingestion."""
 
+    success: bool = True
     ingested: int = Field(..., description="Number of readings ingested")
     readings: list[ReadingResponse]
+
+
+class SingleReadingResponse(BaseModel):
+    """Wrapper for a single reading ingestion response."""
+
+    success: bool = True
+    reading: ReadingResponse
