@@ -1,0 +1,28 @@
+[project]
+name = "sensor-intelligence"
+version = "0.1.0"
+description = "Sensor Intelligence Service for SentinelAI Industrial Safety Platform"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "alembic/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 70
