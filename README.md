@@ -101,6 +101,38 @@ industrial-safety-intelligence/
    ```
    The interactive Swagger documentation will be available at: [http://localhost:8000/docs](http://localhost:8000/docs)
 
+### Interactive API Testing with Swagger
+
+You can test the ingestion and retrieval flow directly from the Swagger UI:
+
+1. **Register a Sensor**:
+   Expand `POST /api/v1/sensors` and register a new sensor (e.g. `S001`):
+   ```json
+   {
+     "sensor_id": "S001",
+     "sensor_name": "Zone A Gas Detector",
+     "sensor_type": "GAS",
+     "location_zone": "ZONE_A",
+     "unit": "ppm",
+     "min_value": 0.0,
+     "max_value": 10000.0
+   }
+   ```
+2. **Ingest Readings**:
+   Expand `POST /api/v1/readings/ingest`. Ingestion validates if the sensor is registered and is not `OFFLINE`.
+   
+   *Timezone Note*: If your local timezone has an offset (e.g., IST `+05:30`), ensure the timestamp reflects UTC or explicitly includes your timezone offset so it is not marked as a future timestamp by the validation rules:
+   ```json
+   {
+     "sensor_id": "S001",
+     "value": 45.2,
+     "timestamp": "2026-06-27T16:30:00+05:30",
+     "confidence": 98.5
+   }
+   ```
+3. **Retrieve and Verify**:
+   Use `GET /api/v1/readings/latest/{sensor_id}` or `GET /api/v1/readings/{sensor_id}` to fetch the ingested records.
+
 ### Verification
 
 To run the verification test suite:
