@@ -26,18 +26,20 @@ class SQLAlchemyReadingRepository(ReadingRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    # ── Queries ──
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Queries
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    async def get_by_id(self, id: str) -> Optional[ReadingModel]:
+    async def get_reading_by_id(self, id: str) -> Optional[ReadingModel]:
         try:
             stmt = select(ReadingModel).where(ReadingModel.id == id)
             result = await self._session.execute(stmt)
             return result.scalar_one_or_none()
         except SQLAlchemyError:
-            logger.exception("DB error in get_by_id (id=%s)", id)
+            logger.exception("DB error in get_reading_by_id (id=%s)", id)
             raise
 
-    async def get_latest(self, sensor_pk: str) -> Optional[ReadingModel]:
+    async def get_latest_reading(self, sensor_pk: str) -> Optional[ReadingModel]:
         try:
             stmt = (
                 select(ReadingModel)
@@ -48,14 +50,16 @@ class SQLAlchemyReadingRepository(ReadingRepository):
             result = await self._session.execute(stmt)
             return result.scalar_one_or_none()
         except SQLAlchemyError:
-            logger.exception("DB error in get_latest (sensor_pk=%s)", sensor_pk)
+            logger.exception(
+                "DB error in get_latest_reading (sensor_pk=%s)", sensor_pk
+            )
             raise
 
-    async def get_range(
+    async def get_sensor_history(
         self,
         sensor_pk: str,
-        from_dt: datetime,
-        to_dt: datetime,
+        start_time: datetime,
+        end_time: datetime,
         limit: int = 1000,
     ) -> list[ReadingModel]:
         try:
@@ -63,8 +67,8 @@ class SQLAlchemyReadingRepository(ReadingRepository):
                 select(ReadingModel)
                 .where(
                     ReadingModel.sensor_id == sensor_pk,
-                    ReadingModel.timestamp >= from_dt,
-                    ReadingModel.timestamp <= to_dt,
+                    ReadingModel.timestamp >= start_time,
+                    ReadingModel.timestamp <= end_time,
                 )
                 .order_by(ReadingModel.timestamp.asc())
                 .limit(limit)
@@ -72,7 +76,30 @@ class SQLAlchemyReadingRepository(ReadingRepository):
             result = await self._session.execute(stmt)
             return list(result.scalars().all())
         except SQLAlchemyError:
-            logger.exception("DB error in get_range (sensor_pk=%s)", sensor_pk)
+            logger.exception(
+                "DB error in get_sensor_history (sensor_pk=%s)", sensor_pk
+            )
+            raise
+
+    async def list_readings(
+        self,
+        sensor_pk: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[ReadingModel]:
+        try:
+            stmt = select(ReadingModel)
+            if sensor_pk is not None:
+                stmt = stmt.where(ReadingModel.sensor_id == sensor_pk)
+            stmt = (
+                stmt.order_by(ReadingModel.timestamp.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            result = await self._session.execute(stmt)
+            return list(result.scalars().all())
+        except SQLAlchemyError:
+            logger.exception("DB error in list_readings")
             raise
 
     async def count_for_sensor(self, sensor_pk: str) -> int:
@@ -83,16 +110,36 @@ class SQLAlchemyReadingRepository(ReadingRepository):
             result = await self._session.execute(stmt)
             return result.scalar_one()
         except SQLAlchemyError:
-            logger.exception("DB error in count_for_sensor (sensor_pk=%s)", sensor_pk)
+            logger.exception(
+                "DB error in count_for_sensor (sensor_pk=%s)", sensor_pk
+            )
+            raise
+
+    async def reading_exists(self, id: str) -> bool:
+        try:
+            stmt = select(
+                select(ReadingModel.id)
+                .where(ReadingModel.id == id)
+                .limit(1)
+                .exists()
+            )
+            result = await self._session.execute(stmt)
+            return result.scalar_one()
+        except SQLAlchemyError:
+            logger.exception("DB error in reading_exists (id=%s)", id)
             raise
 
     async def get_stats(
         self,
         sensor_pk: str,
-        from_dt: datetime,
-        to_dt: datetime,
+        start_time: datetime,
+        end_time: datetime,
     ) -> Optional[ReadingStats]:
-        """Compute AVG, MIN, MAX, COUNT, and approximate STD DEV."""
+        """Compute AVG, MIN, MAX, COUNT, and STD DEV.
+
+        Uses a two-pass approach for STD DEV because SQLite
+        lacks a native stddev aggregate function.
+        """
         try:
             stmt = select(
                 func.avg(ReadingModel.value),
@@ -101,8 +148,8 @@ class SQLAlchemyReadingRepository(ReadingRepository):
                 func.count(ReadingModel.id),
             ).where(
                 ReadingModel.sensor_id == sensor_pk,
-                ReadingModel.timestamp >= from_dt,
-                ReadingModel.timestamp <= to_dt,
+                ReadingModel.timestamp >= start_time,
+                ReadingModel.timestamp <= end_time,
             )
             result = await self._session.execute(stmt)
             row = result.one()
@@ -111,11 +158,11 @@ class SQLAlchemyReadingRepository(ReadingRepository):
             if count == 0:
                 return None
 
-            # Compute std_dev in a second pass (SQLite lacks native stddev)
+            # Second pass for stddev (SQLite compat)
             vals_stmt = select(ReadingModel.value).where(
                 ReadingModel.sensor_id == sensor_pk,
-                ReadingModel.timestamp >= from_dt,
-                ReadingModel.timestamp <= to_dt,
+                ReadingModel.timestamp >= start_time,
+                ReadingModel.timestamp <= end_time,
             )
             vals_result = await self._session.execute(vals_stmt)
             values = [r[0] for r in vals_result.all()]
@@ -129,26 +176,30 @@ class SQLAlchemyReadingRepository(ReadingRepository):
                 min_value=min_val,
                 max_value=max_val,
                 count=count,
-                window_start=from_dt,
-                window_end=to_dt,
+                window_start=start_time,
+                window_end=end_time,
             )
         except SQLAlchemyError:
             logger.exception("DB error in get_stats (sensor_pk=%s)", sensor_pk)
             raise
 
-    # ── Mutations ──
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Mutations
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    async def save(self, reading: ReadingModel) -> ReadingModel:
+    async def create_reading(self, reading: ReadingModel) -> ReadingModel:
         try:
             self._session.add(reading)
             await self._session.flush()
             await self._session.refresh(reading)
             return reading
         except SQLAlchemyError:
-            logger.exception("DB error in save")
+            logger.exception("DB error in create_reading")
             raise
 
-    async def save_batch(self, readings: list[ReadingModel]) -> list[ReadingModel]:
+    async def create_readings_batch(
+        self, readings: list[ReadingModel]
+    ) -> list[ReadingModel]:
         try:
             self._session.add_all(readings)
             await self._session.flush()
@@ -156,5 +207,5 @@ class SQLAlchemyReadingRepository(ReadingRepository):
                 await self._session.refresh(r)
             return readings
         except SQLAlchemyError:
-            logger.exception("DB error in save_batch")
+            logger.exception("DB error in create_readings_batch")
             raise

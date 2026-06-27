@@ -1,12 +1,14 @@
 """Reading service — business logic for sensor data ingestion.
 
-Business rules:
+Business rules enforced during ingestion:
   1. The referenced sensor must exist
-  2. Reading value must not be null/NaN
-  3. Timestamp must not be in the future (>5 min tolerance)
-  4. Reading value outside sensor min/max range logs a warning
-  5. Confidence must be 0-100
-  6. Batch ingestion validates each reading independently
+  2. Reject readings for sensors with OFFLINE status
+  3. Reading value must be a finite number (no NaN / Inf)
+  4. Timestamp must not be in the future (>5 min tolerance)
+  5. Reading value must be within sensor's configured min/max range
+  6. Confidence must be 0-100
+  7. Prevent duplicate readings (same sensor + same timestamp)
+  8. Batch ingestion validates each reading; entire batch rejected on failure
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from app.sensor_intelligence.schemas.reading_schemas import (
     ReadingCreateRequest,
 )
 from app.shared.exceptions.domain_exceptions import (
+    BusinessRuleViolationError,
     InvalidReadingError,
     ResourceNotFoundError,
     ValidationError,
@@ -37,6 +40,9 @@ logger = logging.getLogger(__name__)
 
 # Allow 5 minutes of clock drift for future timestamp detection
 _FUTURE_TOLERANCE = timedelta(minutes=5)
+
+# Sensor statuses that block ingestion
+_INACTIVE_STATUSES = frozenset({"OFFLINE"})
 
 
 class ReadingService:
@@ -62,14 +68,23 @@ class ReadingService:
         return sensor
 
     @staticmethod
+    def _validate_sensor_active(sensor: SensorModel) -> None:
+        """Rule 2: reject readings for OFFLINE sensors."""
+        if sensor.status in _INACTIVE_STATUSES:
+            raise BusinessRuleViolationError(
+                f"Cannot ingest reading for sensor '{sensor.sensor_id}' "
+                f"with status '{sensor.status}'. Sensor must be active."
+            )
+
+    @staticmethod
     def _validate_value(value: float) -> None:
-        """Rule 2: value must be a finite number."""
+        """Rule 3: value must be a finite number."""
         if math.isnan(value) or math.isinf(value):
             raise InvalidReadingError("value must be a finite number")
 
     @staticmethod
     def _validate_timestamp(timestamp: datetime) -> None:
-        """Rule 3: timestamp must not be in the future (with tolerance)."""
+        """Rule 4: timestamp must not be in the future (with tolerance)."""
         now = datetime.now(timezone.utc)
         # Make timestamp tz-aware if naive
         ts = timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)
@@ -79,33 +94,48 @@ class ReadingService:
             )
 
     @staticmethod
-    def _check_range(value: float, sensor: SensorModel) -> None:
-        """Rule 4: log warning if value outside sensor's calibrated range."""
+    def _validate_range(value: float, sensor: SensorModel) -> None:
+        """Rule 5: reject values outside sensor's configured min/max."""
         if sensor.min_value is not None and value < sensor.min_value:
-            logger.warning(
-                "Reading value %.2f below sensor %s min_value %.2f",
-                value, sensor.sensor_id, sensor.min_value,
+            raise InvalidReadingError(
+                f"value {value} is below sensor minimum {sensor.min_value}"
             )
         if sensor.max_value is not None and value > sensor.max_value:
-            logger.warning(
-                "Reading value %.2f above sensor %s max_value %.2f",
-                value, sensor.sensor_id, sensor.max_value,
+            raise InvalidReadingError(
+                f"value {value} exceeds sensor maximum {sensor.max_value}"
             )
 
     @staticmethod
     def _validate_confidence(confidence: float) -> None:
-        """Rule 5: confidence must be 0-100."""
+        """Rule 6: confidence must be 0-100."""
         if confidence < 0 or confidence > 100:
             raise InvalidReadingError(
                 f"confidence must be between 0 and 100, got {confidence}"
             )
 
-    def _validate_reading(self, request: ReadingCreateRequest, sensor: SensorModel) -> None:
+    async def _check_duplicate(
+        self, sensor_pk: str, timestamp: datetime
+    ) -> None:
+        """Rule 7: prevent duplicate readings (same sensor + timestamp)."""
+        existing = await self._reading_repo.get_sensor_history(
+            sensor_pk, timestamp, timestamp, limit=1
+        )
+        if existing:
+            raise BusinessRuleViolationError(
+                f"Duplicate reading: sensor already has a reading at "
+                f"{timestamp.isoformat()}"
+            )
+
+    async def _validate_reading(
+        self, request: ReadingCreateRequest, sensor: SensorModel
+    ) -> None:
         """Run all validation rules for a single reading."""
+        self._validate_sensor_active(sensor)
         self._validate_value(request.value)
         self._validate_timestamp(request.timestamp)
+        self._validate_range(request.value, sensor)
         self._validate_confidence(request.confidence)
-        self._check_range(request.value, sensor)
+        await self._check_duplicate(sensor.id, request.timestamp)
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Ingestion
@@ -114,7 +144,7 @@ class ReadingService:
     async def ingest_reading(self, request: ReadingCreateRequest) -> ReadingModel:
         """Ingest a single sensor reading with full validation."""
         sensor = await self._resolve_sensor(request.sensor_id)
-        self._validate_reading(request, sensor)
+        await self._validate_reading(request, sensor)
 
         reading = ReadingModel(
             id=str(uuid.uuid4()),
@@ -124,14 +154,14 @@ class ReadingService:
             confidence=request.confidence,
             raw_metadata=str(request.metadata) if request.metadata else None,
         )
-        return await self._reading_repo.save(reading)
+        return await self._reading_repo.create_reading(reading)
 
     async def ingest_batch(
         self, requests: list[ReadingCreateRequest]
     ) -> list[ReadingModel]:
         """Ingest multiple readings. Validates each independently.
 
-        Rule 6: each reading is validated; the entire batch is rejected
+        Rule 8: each reading is validated; the entire batch is rejected
         if any single reading fails validation.
         """
         if not requests:
@@ -145,7 +175,7 @@ class ReadingService:
 
         # Validate all readings
         for req in requests:
-            self._validate_reading(req, sensor_cache[req.sensor_id])
+            await self._validate_reading(req, sensor_cache[req.sensor_id])
 
         # Build ORM objects
         models = [
@@ -159,7 +189,7 @@ class ReadingService:
             )
             for req in requests
         ]
-        return await self._reading_repo.save_batch(models)
+        return await self._reading_repo.create_readings_batch(models)
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Queries
@@ -168,7 +198,7 @@ class ReadingService:
     async def get_latest_reading(self, sensor_id: str) -> Optional[ReadingModel]:
         """Get the most recent reading for a sensor."""
         sensor = await self._resolve_sensor(sensor_id)
-        return await self._reading_repo.get_latest(sensor.id)
+        return await self._reading_repo.get_latest_reading(sensor.id)
 
     async def get_readings_range(
         self,
@@ -179,7 +209,7 @@ class ReadingService:
     ) -> list[ReadingModel]:
         """Get historical readings for a sensor within a time range."""
         sensor = await self._resolve_sensor(sensor_id)
-        return await self._reading_repo.get_range(sensor.id, from_dt, to_dt, limit)
+        return await self._reading_repo.get_sensor_history(sensor.id, from_dt, to_dt, limit)
 
     async def get_reading_stats(
         self,

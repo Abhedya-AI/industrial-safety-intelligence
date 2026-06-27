@@ -33,6 +33,17 @@ test_engine = create_async_engine(
     connect_args={"check_same_thread": False},
 )
 
+
+# Enable FK enforcement for SQLite (required for FK constraint tests)
+from sqlalchemy import event  # noqa: E402
+
+
+@event.listens_for(test_engine.sync_engine, "connect")
+def _enable_sqlite_fks(dbapi_conn, connection_record):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
 TestSessionFactory = async_sessionmaker(
     bind=test_engine,
     class_=AsyncSession,
