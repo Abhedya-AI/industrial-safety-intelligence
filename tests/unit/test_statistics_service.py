@@ -229,10 +229,17 @@ async def test_statistics_with_rolling_window(
     sensor: SensorModel,
     reading_repo: SQLAlchemyReadingRepository,
 ):
+    base = datetime.now(timezone.utc) - timedelta(hours=24)
     values = list(range(1, 21))  # 1..20
-    await _seed_readings(reading_repo, sensor.id, [float(v) for v in values])
+    await _seed_readings(reading_repo, sensor.id, [float(v) for v in values], base=base)
 
-    result = await service.compute_statistics("S001", rolling_window=5)
+    result = await service.compute_statistics(
+        "S001",
+        start=base - timedelta(minutes=1),
+        end=base + timedelta(hours=20),
+        rolling_window=5,
+    )
+    assert result.reading_count == 20
     assert result.rolling_avg is not None
     assert result.rolling_avg.window_size == 5
     assert len(result.rolling_avg.values) == 16  # 20 - 5 + 1
