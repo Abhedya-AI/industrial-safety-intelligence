@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 
 
-class AnomalyType(StrEnum):
+class AnomalyType(str, Enum):
     """Types of anomalies detectable in sensor readings."""
 
     SPIKE = "SPIKE"

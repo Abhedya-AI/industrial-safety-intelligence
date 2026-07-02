@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 
 
-class AlertLevel(StrEnum):
+class AlertLevel(str, Enum):
     """Graduated alert severity levels for operational response."""
 
     INFO = "INFO"
     WARNING = "WARNING"
     CRITICAL = "CRITICAL"
     EMERGENCY = "EMERGENCY"
+

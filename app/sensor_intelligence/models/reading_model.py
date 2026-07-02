@@ -28,6 +28,12 @@ class ReadingModel(Base):
         DateTime, nullable=False, server_default=func.now()
     )
 
+    # Anomaly detection results (populated post-ingestion if detector is enabled)
+    anomaly_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    anomaly_status: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True, default="NORMAL"
+    )
+
     # Relationships
     sensor = relationship("SensorModel", back_populates="readings")
     anomalies = relationship("AnomalyModel", back_populates="reading", lazy="select")

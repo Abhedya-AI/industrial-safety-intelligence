@@ -21,6 +21,8 @@ from app.sensor_intelligence.models.reading_model import ReadingModel  # noqa: F
 from app.sensor_intelligence.models.anomaly_model import AnomalyModel  # noqa: F401
 from app.sensor_intelligence.models.alert_model import AlertModel  # noqa: F401
 from app.sensor_intelligence.models.threshold_model import ThresholdModel  # noqa: F401
+from app.sensor_intelligence.models.sensor_health_model import SensorHealthModel  # noqa: F401
+from app.sensor_intelligence.models.sensor_baseline_model import SensorBaselineModel  # noqa: F401
 
 
 # ── In-Memory Test Database ──

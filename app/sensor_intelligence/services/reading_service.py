@@ -19,6 +19,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import numpy as np
+
+from app.sensor_intelligence.anomaly_detection.base import BaseAnomalyDetector
 from app.sensor_intelligence.models.reading_model import ReadingModel
 from app.sensor_intelligence.models.sensor_model import SensorModel
 from app.sensor_intelligence.repositories.reading_repository import (
@@ -52,9 +55,11 @@ class ReadingService:
         self,
         reading_repo: ReadingRepository,
         sensor_repo: SensorRepository,
+        anomaly_detector: Optional[BaseAnomalyDetector] = None,
     ) -> None:
         self._reading_repo = reading_repo
         self._sensor_repo = sensor_repo
+        self._detector = anomaly_detector
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Validation helpers (private)
@@ -138,11 +143,53 @@ class ReadingService:
         await self._check_duplicate(sensor.id, request.timestamp)
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Anomaly scoring (private)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def _score_reading(self, reading: ReadingModel, sensor_id: str) -> None:
+        """Score a reading using the configured anomaly detector.
+
+        Sets anomaly_score and anomaly_status on the reading model.
+        If no detector is configured, defaults to NORMAL with score 0.0.
+
+        This is a synchronous, side-effect-only method — it mutates the
+        reading in place. Detector failures are logged and swallowed to
+        avoid blocking ingestion.
+        """
+        if self._detector is None:
+            reading.anomaly_score = 0.0
+            reading.anomaly_status = "NORMAL"
+            return
+
+        try:
+            features = np.array([[reading.value]])
+            results = self._detector.classify(features, [sensor_id])
+            if results:
+                result = results[0]
+                reading.anomaly_score = result.score
+                reading.anomaly_status = result.status.value
+                logger.info(
+                    "Anomaly score for sensor %s: %.4f (%s)",
+                    sensor_id, result.score, result.status.value,
+                )
+            else:
+                reading.anomaly_score = 0.0
+                reading.anomaly_status = "NORMAL"
+        except Exception:
+            logger.exception("Anomaly detection failed for sensor %s — defaulting to NORMAL", sensor_id)
+            reading.anomaly_score = 0.0
+            reading.anomaly_status = "NORMAL"
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Ingestion
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     async def ingest_reading(self, request: ReadingCreateRequest) -> ReadingModel:
-        """Ingest a single sensor reading with full validation."""
+        """Ingest a single sensor reading with full validation.
+
+        If an anomaly detector is configured, the reading is scored
+        after ingestion and anomaly_score / anomaly_status are set.
+        """
         sensor = await self._resolve_sensor(request.sensor_id)
         await self._validate_reading(request, sensor)
 
@@ -154,6 +201,10 @@ class ReadingService:
             confidence=request.confidence,
             raw_metadata=str(request.metadata) if request.metadata else None,
         )
+
+        # Score reading if detector is available
+        self._score_reading(reading, request.sensor_id)
+
         return await self._reading_repo.create_reading(reading)
 
     async def ingest_batch(
@@ -178,8 +229,9 @@ class ReadingService:
             await self._validate_reading(req, sensor_cache[req.sensor_id])
 
         # Build ORM objects
-        models = [
-            ReadingModel(
+        models = []
+        for req in requests:
+            m = ReadingModel(
                 id=str(uuid.uuid4()),
                 sensor_id=sensor_cache[req.sensor_id].id,
                 value=req.value,
@@ -187,8 +239,8 @@ class ReadingService:
                 confidence=req.confidence,
                 raw_metadata=str(req.metadata) if req.metadata else None,
             )
-            for req in requests
-        ]
+            self._score_reading(m, req.sensor_id)
+            models.append(m)
         return await self._reading_repo.create_readings_batch(models)
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
