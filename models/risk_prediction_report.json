@@ -1,0 +1,33 @@
+{
+  "accuracy": 0.9748,
+  "precision": 0.6492,
+  "recall": 0.8339,
+  "f1": 0.7301,
+  "roc_auc": 0.9903,
+  "confusion": [
+    [
+      18812,
+      369
+    ],
+    [
+      136,
+      683
+    ]
+  ],
+  "report": "              precision    recall  f1-score   support\n\n      Normal       0.99      0.98      0.99     19181\n    Accident       0.65      0.83      0.73       819\n\n    accuracy                           0.97     20000\n   macro avg       0.82      0.91      0.86     20000\nweighted avg       0.98      0.97      0.98     20000\n",
+  "total_samples": 100000,
+  "test_samples": 20000,
+  "train_samples": 80000,
+  "positive_count": 819,
+  "feature_count": 116,
+  "cv_scores": [
+    0.9909,
+    0.9919,
+    0.9909,
+    0.9911,
+    0.9912
+  ],
+  "cv_mean": 0.9912,
+  "cv_std": 0.0004,
+  "best_params": {}
+}
