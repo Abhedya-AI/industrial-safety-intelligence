@@ -81,3 +81,21 @@ def get_reading_service(
     sensor_repo = SQLAlchemySensorRepository(session)
     return ReadingService(reading_repo, sensor_repo)
 
+
+# ── Risk Prediction Dependencies ──
+
+
+def get_risk_prediction_service(
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Provide a RiskPredictionService wired to a SQLAlchemy repository."""
+    from app.risk_prediction.repositories.sqlalchemy_risk_prediction_repo import (
+        SQLAlchemyRiskPredictionRepository,
+    )
+    from app.risk_prediction.services.risk_prediction_service import (
+        RiskPredictionService,
+    )
+
+    repo = SQLAlchemyRiskPredictionRepository(session)
+    return RiskPredictionService(repo)
+

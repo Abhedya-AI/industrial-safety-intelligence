@@ -10,6 +10,7 @@ from app.core.logging import setup_logging
 from app.core.middleware import setup_middleware
 from app.core.settings import get_settings
 from app.sensor_intelligence.api.router import sensor_intelligence_router
+from app.risk_prediction.api.router import risk_prediction_router
 
 # Initialize unified logging
 setup_logging()
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             sensor_model,
             threshold_model,
         )
+        from app.risk_prediction.models import risk_prediction_model  # noqa: F401
 
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -75,8 +77,8 @@ def create_app() -> FastAPI:
     setup_middleware(application)
 
     # Mount v1 Routers
-    # Future: mount other module routers here
     application.include_router(sensor_intelligence_router, prefix=settings.api_prefix)
+    application.include_router(risk_prediction_router, prefix=settings.api_prefix)
 
     return application
 

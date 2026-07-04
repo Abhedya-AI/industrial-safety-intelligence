@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.risk_prediction.domain.value_objects import PredictionStatus, RiskLevel
 
@@ -140,6 +140,24 @@ class RiskPredictionResponse(BaseModel):
         None, description="Human-readable risk explanation",
     )
     created_at: datetime = Field(..., description="Record creation timestamp")
+
+    @field_validator("top_contributing_factors", mode="before")
+    @classmethod
+    def _parse_contributing_factors(cls, v):
+        """Deserialise JSON string stored in ORM Text column."""
+        if isinstance(v, str):
+            import json
+            return json.loads(v)
+        return v
+
+    @field_validator("risk_breakdown", mode="before")
+    @classmethod
+    def _parse_risk_breakdown(cls, v):
+        """Deserialise JSON string stored in ORM Text column."""
+        if isinstance(v, str):
+            import json
+            return json.loads(v)
+        return v
 
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
