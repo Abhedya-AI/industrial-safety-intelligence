@@ -99,3 +99,51 @@ def get_risk_prediction_service(
     repo = SQLAlchemyRiskPredictionRepository(session)
     return RiskPredictionService(repo)
 
+
+# ── Compound Risk Intelligence Dependencies ──
+
+
+def get_compound_risk_service(
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Provide a CompoundRiskService wired to all sub-components.
+
+    Injects:
+      - SQLAlchemy repository → Aggregation service
+      - Default rule engine (configurable thresholds)
+      - Explainability service
+      - Noop Kafka publisher (switched to real in production)
+    """
+    from app.compound_risk.messaging.publisher import CompoundRiskPublisher
+    from app.compound_risk.repositories.sqlalchemy_compound_risk_repo import (
+        SQLAlchemyCompoundRiskRepository,
+    )
+    from app.compound_risk.rules.rule_engine import (
+        CompoundRiskRuleEngine,
+        create_default_rules,
+    )
+    from app.compound_risk.services.compound_risk_facade import (
+        CompoundRiskService,
+    )
+    from app.compound_risk.services.compound_risk_service import (
+        CompoundRiskAggregationService,
+    )
+    from app.compound_risk.services.explainability_service import (
+        ExplainabilityService,
+    )
+    from app.shared.messaging.producer import NoopEventProducer
+
+    repo = SQLAlchemyCompoundRiskRepository(session)
+    aggregation = CompoundRiskAggregationService(repo)
+    rule_engine = CompoundRiskRuleEngine(create_default_rules())
+    explainability = ExplainabilityService()
+    publisher = CompoundRiskPublisher(NoopEventProducer())
+
+    return CompoundRiskService(
+        aggregation_service=aggregation,
+        rule_engine=rule_engine,
+        explainability_service=explainability,
+        publisher=publisher,
+    )
+
+

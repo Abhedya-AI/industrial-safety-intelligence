@@ -24,6 +24,7 @@ from app.sensor_intelligence.models.threshold_model import ThresholdModel  # noq
 from app.sensor_intelligence.models.sensor_health_model import SensorHealthModel  # noqa: F401
 from app.sensor_intelligence.models.sensor_baseline_model import SensorBaselineModel  # noqa: F401
 from app.risk_prediction.models.risk_prediction_model import RiskPredictionModel  # noqa: F401
+from app.compound_risk.models.compound_risk_model import CompoundRiskModel  # noqa: F401
 
 
 # ── In-Memory Test Database ──
