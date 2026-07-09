@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
     mqtt_broker_url: str = "mqtt://localhost:1883"
 
+    # ── Graph Repository ──
+    graph_repository: str = "in_memory"  # "in_memory" | "neo4j"
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_username: str = "neo4j"
+    neo4j_password: str = "sentinelai_test"
+    neo4j_database: str = "neo4j"
+
     # ── Logging ──
     log_level: str = "INFO"
 

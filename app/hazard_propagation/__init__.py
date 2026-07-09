@@ -1,1 +1,1 @@
-# Hazard Propagation module
+"""Hazard Propagation Engine — domain and graph layer."""

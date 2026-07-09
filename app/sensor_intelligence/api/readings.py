@@ -6,16 +6,27 @@ Implements:
   - GET  /readings/latest/{sensor_id}  — latest reading for a sensor
   - GET  /readings/{sensor_id}         — historical readings for a sensor
   - GET  /readings/{sensor_id}/stats   — aggregated statistics
+
+Kafka events published after successful operations:
+  - sensor.reading.created   — for every persisted reading
+  - sensor.reading.anomaly   — when anomaly detection flags a reading
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.dependencies import get_reading_service
+from app.core.dependencies import (
+    get_reading_service,
+    get_sensor_intelligence_publisher,
+)
+from app.sensor_intelligence.messaging.publisher import (
+    SensorIntelligencePublisher,
+)
 from app.sensor_intelligence.schemas.reading_schemas import (
     BatchReadingCreateRequest,
     BatchReadingResponse,
@@ -27,7 +38,48 @@ from app.sensor_intelligence.schemas.reading_schemas import (
 from app.sensor_intelligence.services.reading_service import ReadingService
 from app.shared.exceptions.domain_exceptions import ResourceNotFoundError
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/readings", tags=["Readings"])
+
+
+# ──────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────
+
+
+def _publish_reading_events(
+    reading,
+    request: ReadingCreateRequest,
+    publisher: SensorIntelligencePublisher,
+) -> None:
+    """Publish Kafka events after a reading is persisted.
+
+    Always publishes sensor.reading.created.
+    Publishes sensor.reading.anomaly when anomaly_status != NORMAL.
+
+    Publishing failures are caught inside the publisher — they never
+    crash the HTTP response.
+    """
+    publisher.publish_reading_created(
+        reading_id=reading.id,
+        sensor_id=request.sensor_id,
+        value=reading.value,
+        timestamp=reading.timestamp,
+        anomaly_score=reading.anomaly_score or 0.0,
+        anomaly_status=reading.anomaly_status or "NORMAL",
+        confidence=reading.confidence or 100.0,
+    )
+
+    # Publish anomaly event if anomaly detected
+    if reading.anomaly_status and reading.anomaly_status != "NORMAL":
+        publisher.publish_reading_anomaly(
+            reading_id=reading.id,
+            sensor_id=request.sensor_id,
+            value=reading.value,
+            anomaly_score=reading.anomaly_score or 0.0,
+            anomaly_status=reading.anomaly_status,
+        )
 
 
 # ──────────────────────────────────────────────
@@ -47,8 +99,13 @@ router = APIRouter(prefix="/readings", tags=["Readings"])
 async def ingest_reading(
     request: ReadingCreateRequest,
     service: ReadingService = Depends(get_reading_service),
+    publisher: SensorIntelligencePublisher = Depends(get_sensor_intelligence_publisher),
 ) -> SingleReadingResponse:
     reading = await service.ingest_reading(request)
+
+    # Publish events AFTER successful persistence (outside business logic)
+    _publish_reading_events(reading, request, publisher)
+
     return SingleReadingResponse(
         success=True,
         reading=ReadingResponse.model_validate(reading),
@@ -66,8 +123,14 @@ async def ingest_reading(
 async def ingest_batch(
     request: BatchReadingCreateRequest,
     service: ReadingService = Depends(get_reading_service),
+    publisher: SensorIntelligencePublisher = Depends(get_sensor_intelligence_publisher),
 ) -> BatchReadingResponse:
     readings = await service.ingest_batch(request.readings)
+
+    # Publish events for each reading in the batch
+    for reading, req in zip(readings, request.readings):
+        _publish_reading_events(reading, req, publisher)
+
     return BatchReadingResponse(
         success=True,
         ingested=len(readings),

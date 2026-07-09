@@ -1,1 +1,1 @@
-# Hazard Propagation Services
+"""Hazard Propagation Engine — services layer."""

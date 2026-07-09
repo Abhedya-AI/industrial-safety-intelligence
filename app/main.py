@@ -12,6 +12,7 @@ from app.core.settings import get_settings
 from app.sensor_intelligence.api.router import sensor_intelligence_router
 from app.risk_prediction.api.router import risk_prediction_router
 from app.compound_risk.api.router import compound_risk_router
+from app.hazard_propagation.api.router import hazard_propagation_router
 
 # Initialize unified logging
 setup_logging()
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
     application.include_router(sensor_intelligence_router, prefix=settings.api_prefix)
     application.include_router(risk_prediction_router, prefix=settings.api_prefix)
     application.include_router(compound_risk_router, prefix=settings.api_prefix)
+    application.include_router(hazard_propagation_router, prefix=settings.api_prefix)
 
     return application
 

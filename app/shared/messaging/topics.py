@@ -18,6 +18,7 @@ class KafkaTopics:
     SENSOR_READING_CREATED = "sensor.reading.created"
     SENSOR_READING_ANOMALY = "sensor.reading.anomaly"
     SENSOR_STATUS_CHANGED = "sensor.status.changed"
+    SENSOR_HEALTH_UPDATED = "sensor.health.updated"
 
     # ── Vision Intelligence ──
     VISION_EVENT_DETECTED = "vision.event.detected"
@@ -84,6 +85,7 @@ class KafkaTopics:
             cls.SENSOR_READING_CREATED,
             cls.SENSOR_READING_ANOMALY,
             cls.SENSOR_STATUS_CHANGED,
+            cls.SENSOR_HEALTH_UPDATED,
         ]
 
     @classmethod

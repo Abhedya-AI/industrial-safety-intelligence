@@ -105,7 +105,7 @@ class TestTopics:
         assert len(topics) >= 30
 
     def test_sensor_topics_helper(self):
-        assert len(KafkaTopics.sensor_topics()) == 3
+        assert len(KafkaTopics.sensor_topics()) == 4
 
     def test_risk_topics_helper(self):
         assert len(KafkaTopics.risk_topics()) == 4

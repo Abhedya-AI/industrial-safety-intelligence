@@ -100,6 +100,18 @@ def get_risk_prediction_service(
     return RiskPredictionService(repo)
 
 
+def get_risk_prediction_publisher():
+    """Provide a RiskPredictionPublisher wired to a shared Kafka producer.
+
+    Uses NoopEventProducer in development; switch to KafkaEventProducer in
+    production via environment configuration.
+    """
+    from app.risk_prediction.messaging.publisher import RiskPredictionPublisher
+    from app.shared.messaging.producer import NoopEventProducer
+
+    return RiskPredictionPublisher(NoopEventProducer())
+
+
 # ── Compound Risk Intelligence Dependencies ──
 
 
@@ -147,3 +159,112 @@ def get_compound_risk_service(
     )
 
 
+# ── Sensor Intelligence Kafka Publisher ──
+
+
+def get_sensor_intelligence_publisher():
+    """Provide a SensorIntelligencePublisher wired to a shared Kafka producer.
+
+    Uses NoopEventProducer in development; switch to KafkaEventProducer in
+    production via environment configuration.
+    """
+    from app.sensor_intelligence.messaging.publisher import (
+        SensorIntelligencePublisher,
+    )
+    from app.shared.messaging.producer import NoopEventProducer
+
+    return SensorIntelligencePublisher(NoopEventProducer())
+
+
+# ── Hazard Propagation Dependencies ──
+
+# Cached graph repository singleton (created once, reused)
+_graph_repository = None
+
+
+def _get_graph_repository(settings: Settings):
+    """Select graph repository implementation based on configuration.
+
+    Reads ``settings.graph_repository`` to choose between:
+      - ``"in_memory"`` → InMemoryGraphRepository (default, no external deps)
+      - ``"neo4j"``     → Neo4jGraphRepository (requires running Neo4j instance)
+
+    The repository is cached as a module-level singleton so that all
+    requests share the same graph state.
+    """
+    global _graph_repository
+    if _graph_repository is not None:
+        return _graph_repository
+
+    repo_type = settings.graph_repository.lower().strip()
+
+    if repo_type == "neo4j":
+        try:
+            from app.hazard_propagation.repositories.neo4j_graph_repo import (
+                Neo4jGraphRepository,
+            )
+
+            _graph_repository = Neo4jGraphRepository(
+                uri=settings.neo4j_uri,
+                username=settings.neo4j_username,
+                password=settings.neo4j_password,
+                database=settings.neo4j_database,
+            )
+            import logging
+            logging.getLogger(__name__).info(
+                "Graph repository: Neo4jGraphRepository (%s)",
+                settings.neo4j_uri,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to create Neo4jGraphRepository (%s), "
+                "falling back to InMemoryGraphRepository: %s",
+                settings.neo4j_uri, exc,
+            )
+            from app.hazard_propagation.repositories.in_memory_graph_repo import (
+                InMemoryGraphRepository,
+            )
+            _graph_repository = InMemoryGraphRepository()
+    else:
+        from app.hazard_propagation.repositories.in_memory_graph_repo import (
+            InMemoryGraphRepository,
+        )
+        _graph_repository = InMemoryGraphRepository()
+        import logging
+        logging.getLogger(__name__).info(
+            "Graph repository: InMemoryGraphRepository",
+        )
+
+    return _graph_repository
+
+
+def get_hazard_propagation_service(
+    settings: Settings = Depends(get_app_settings),
+):
+    """Provide a HazardPropagationService wired to all sub-components.
+
+    Injects:
+      - Graph repository selected by ``GRAPH_REPOSITORY`` env var:
+        ``"in_memory"`` (default) or ``"neo4j"``
+      - HazardPropagationEngine (BFS propagation)
+      - HazardPropagationPublisher (Noop in dev; real Kafka in production)
+    """
+    from app.hazard_propagation.messaging.publisher import (
+        HazardPropagationPublisher,
+    )
+    from app.hazard_propagation.services.config import PropagationConfig
+    from app.hazard_propagation.services.hazard_propagation_service import (
+        HazardPropagationService,
+    )
+    from app.shared.messaging.producer import NoopEventProducer
+
+    graph_repo = _get_graph_repository(settings)
+    config = PropagationConfig()
+    publisher = HazardPropagationPublisher(NoopEventProducer())
+
+    return HazardPropagationService(
+        graph_repo=graph_repo,
+        publisher=publisher,
+        config=config,
+    )

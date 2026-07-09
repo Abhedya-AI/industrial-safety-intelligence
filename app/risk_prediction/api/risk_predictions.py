@@ -4,6 +4,10 @@ Implements:
   - POST /risk/predict           — compute a risk prediction
   - GET  /risk/predictions       — prediction history (paginated)
   - GET  /risk/predictions/latest — latest prediction
+
+Kafka events published after successful operations:
+  - risk.assessment.generated   — after a prediction is computed
+  - risk.score.updated          — when a risk score is persisted
 """
 
 from __future__ import annotations
@@ -14,12 +18,16 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.dependencies import get_risk_prediction_service
+from app.core.dependencies import (
+    get_risk_prediction_publisher,
+    get_risk_prediction_service,
+)
 from app.risk_prediction.domain.exceptions import (
     InsufficientFeaturesError,
     RiskModelNotLoadedError,
     RiskPredictionFailedError,
 )
+from app.risk_prediction.messaging.publisher import RiskPredictionPublisher
 from app.risk_prediction.schemas import (
     RiskPredictionHistoryResponse,
     RiskPredictionRequest,
@@ -54,6 +62,7 @@ router = APIRouter(prefix="/risk", tags=["Risk Prediction"])
 async def predict_risk(
     request: RiskPredictionRequest,
     service: RiskPredictionService = Depends(get_risk_prediction_service),
+    publisher: RiskPredictionPublisher = Depends(get_risk_prediction_publisher),
 ) -> SingleRiskPredictionResponse:
     try:
         prediction = await service.predict_from_features(
@@ -70,6 +79,9 @@ async def predict_risk(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RiskPredictionFailedError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Publish events AFTER successful prediction (outside business logic)
+    publisher.publish_prediction_events(prediction)
 
     return SingleRiskPredictionResponse(
         success=True,
