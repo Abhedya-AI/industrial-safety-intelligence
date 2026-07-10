@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     # ── Messaging ──
     event_broker: str = "noop"  # "noop" | "kafka" | "mqtt"
     kafka_bootstrap_servers: str = "localhost:9092"
+    kafka_consumer_group_id: str = "sentinel_ai"
+    kafka_auto_offset_reset: str = "earliest"  # "earliest" | "latest"
     mqtt_broker_url: str = "mqtt://localhost:1883"
 
     # ── Graph Repository ──

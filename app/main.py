@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from app.core.logging import setup_logging
 from app.core.middleware import setup_middleware
 from app.core.settings import get_settings
+from app.core.dependencies import start_consumers, stop_consumers
 from app.sensor_intelligence.api.router import sensor_intelligence_router
 from app.risk_prediction.api.router import risk_prediction_router
 from app.compound_risk.api.router import compound_risk_router
@@ -47,14 +48,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             threshold_model,
         )
         from app.risk_prediction.models import risk_prediction_model  # noqa: F401
+        from app.compound_risk.models import compound_risk_model  # noqa: F401
 
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created/verified")
 
+    # Start Kafka consumers (noop if EVENT_BROKER != kafka)
+    start_consumers(settings)
+    logger.info("Event broker: %s", settings.event_broker)
+
     yield
 
     logger.info("Shutting down %s", settings.app_name)
+
+    # Stop Kafka consumers
+    stop_consumers()
+
     from app.shared.database.connection import engine
     await engine.dispose()
     logger.info("Database connection pool closed")

@@ -6,6 +6,7 @@ and service-layer dependencies.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 
 from fastapi import Depends
@@ -16,6 +17,8 @@ from app.shared.database.connection import get_async_session
 
 # Event publisher (generic, shared)
 from app.sensor_intelligence.repositories.noop_publisher import NoOpPublisher
+
+logger = logging.getLogger(__name__)
 
 
 def get_app_settings() -> Settings:
@@ -30,9 +33,56 @@ async def get_db_session(
     yield session
 
 
-# ── Event Publisher ──
+# ── Event Producer (Kafka / Noop) ──
 
+_event_producer = None
 _event_publisher = None
+
+
+def _get_event_producer(settings: Settings):
+    """Select event producer implementation based on configuration.
+
+    Reads ``settings.event_broker`` to choose between:
+      - ``"noop"``  → NoopEventProducer (default, logs events only)
+      - ``"kafka"`` → KafkaEventProducer (connects to Kafka cluster)
+
+    The producer is cached as a module-level singleton so that all
+    publishers share the same connection.
+    """
+    global _event_producer
+    if _event_producer is not None:
+        return _event_producer
+
+    broker = settings.event_broker.lower().strip()
+
+    if broker == "kafka":
+        try:
+            from app.shared.messaging.producer import KafkaEventProducer
+
+            _event_producer = KafkaEventProducer(
+                bootstrap_servers=settings.kafka_bootstrap_servers,
+                enabled=True,
+            )
+            logger.info(
+                "Event producer: KafkaEventProducer (%s)",
+                settings.kafka_bootstrap_servers,
+            )
+        except Exception as exc:
+            from app.shared.messaging.producer import NoopEventProducer
+
+            logger.warning(
+                "Failed to create KafkaEventProducer (%s), "
+                "falling back to NoopEventProducer: %s",
+                settings.kafka_bootstrap_servers, exc,
+            )
+            _event_producer = NoopEventProducer()
+    else:
+        from app.shared.messaging.producer import NoopEventProducer
+
+        _event_producer = NoopEventProducer()
+        logger.info("Event producer: NoopEventProducer (event_broker=%s)", broker)
+
+    return _event_producer
 
 
 def _get_publisher(settings: Settings):
@@ -100,16 +150,17 @@ def get_risk_prediction_service(
     return RiskPredictionService(repo)
 
 
-def get_risk_prediction_publisher():
-    """Provide a RiskPredictionPublisher wired to a shared Kafka producer.
+def get_risk_prediction_publisher(
+    settings: Settings = Depends(get_app_settings),
+):
+    """Provide a RiskPredictionPublisher wired to the shared event producer.
 
-    Uses NoopEventProducer in development; switch to KafkaEventProducer in
-    production via environment configuration.
+    Uses NoopEventProducer when ``EVENT_BROKER=noop`` (default).
+    Uses KafkaEventProducer when ``EVENT_BROKER=kafka``.
     """
     from app.risk_prediction.messaging.publisher import RiskPredictionPublisher
-    from app.shared.messaging.producer import NoopEventProducer
 
-    return RiskPredictionPublisher(NoopEventProducer())
+    return RiskPredictionPublisher(_get_event_producer(settings))
 
 
 # ── Compound Risk Intelligence Dependencies ──
@@ -117,6 +168,7 @@ def get_risk_prediction_publisher():
 
 def get_compound_risk_service(
     session: AsyncSession = Depends(get_async_session),
+    settings: Settings = Depends(get_app_settings),
 ):
     """Provide a CompoundRiskService wired to all sub-components.
 
@@ -143,13 +195,11 @@ def get_compound_risk_service(
     from app.compound_risk.services.explainability_service import (
         ExplainabilityService,
     )
-    from app.shared.messaging.producer import NoopEventProducer
-
     repo = SQLAlchemyCompoundRiskRepository(session)
     aggregation = CompoundRiskAggregationService(repo)
     rule_engine = CompoundRiskRuleEngine(create_default_rules())
     explainability = ExplainabilityService()
-    publisher = CompoundRiskPublisher(NoopEventProducer())
+    publisher = CompoundRiskPublisher(_get_event_producer(settings))
 
     return CompoundRiskService(
         aggregation_service=aggregation,
@@ -162,18 +212,19 @@ def get_compound_risk_service(
 # ── Sensor Intelligence Kafka Publisher ──
 
 
-def get_sensor_intelligence_publisher():
-    """Provide a SensorIntelligencePublisher wired to a shared Kafka producer.
+def get_sensor_intelligence_publisher(
+    settings: Settings = Depends(get_app_settings),
+):
+    """Provide a SensorIntelligencePublisher wired to the shared event producer.
 
-    Uses NoopEventProducer in development; switch to KafkaEventProducer in
-    production via environment configuration.
+    Uses NoopEventProducer when ``EVENT_BROKER=noop`` (default).
+    Uses KafkaEventProducer when ``EVENT_BROKER=kafka``.
     """
     from app.sensor_intelligence.messaging.publisher import (
         SensorIntelligencePublisher,
     )
-    from app.shared.messaging.producer import NoopEventProducer
 
-    return SensorIntelligencePublisher(NoopEventProducer())
+    return SensorIntelligencePublisher(_get_event_producer(settings))
 
 
 # ── Hazard Propagation Dependencies ──
@@ -257,14 +308,225 @@ def get_hazard_propagation_service(
     from app.hazard_propagation.services.hazard_propagation_service import (
         HazardPropagationService,
     )
-    from app.shared.messaging.producer import NoopEventProducer
 
     graph_repo = _get_graph_repository(settings)
     config = PropagationConfig()
-    publisher = HazardPropagationPublisher(NoopEventProducer())
+    publisher = HazardPropagationPublisher(_get_event_producer(settings))
 
     return HazardPropagationService(
         graph_repo=graph_repo,
         publisher=publisher,
         config=config,
     )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Kafka Consumer Infrastructure
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_event_consumer = None
+_consumer_thread = None
+
+
+def _get_all_consumer_topics() -> list[str]:
+    """Collect all topics that our consumers need to subscribe to."""
+    from app.compound_risk.messaging.consumer import (
+        COMPOUND_RISK_SUBSCRIBED_TOPICS,
+    )
+    from app.hazard_propagation.messaging.consumer import (
+        HAZARD_PROPAGATION_SUBSCRIBED_TOPICS,
+    )
+
+    all_topics = list(set(
+        COMPOUND_RISK_SUBSCRIBED_TOPICS + HAZARD_PROPAGATION_SUBSCRIBED_TOPICS
+    ))
+    return all_topics
+
+
+def _get_event_consumer(settings: Settings):
+    """Select event consumer implementation based on configuration.
+
+    Reads ``settings.event_broker`` to choose between:
+      - ``"noop"``  → NoopEventConsumer (default, no Kafka connection)
+      - ``"kafka"`` → KafkaEventConsumer (connects to Kafka cluster)
+
+    The consumer is cached as a module-level singleton.
+    """
+    global _event_consumer
+    if _event_consumer is not None:
+        return _event_consumer
+
+    broker = settings.event_broker.lower().strip()
+
+    if broker == "kafka":
+        try:
+            from app.shared.messaging.consumer import KafkaEventConsumer
+
+            topics = _get_all_consumer_topics()
+            _event_consumer = KafkaEventConsumer(
+                bootstrap_servers=settings.kafka_bootstrap_servers,
+                group_id=settings.kafka_consumer_group_id,
+                topics=topics,
+                enabled=True,
+                auto_offset_reset=settings.kafka_auto_offset_reset,
+            )
+            logger.info(
+                "Event consumer: KafkaEventConsumer (group=%s, topics=%s)",
+                settings.kafka_consumer_group_id, topics,
+            )
+        except Exception as exc:
+            from app.shared.messaging.consumer import NoopEventConsumer
+
+            logger.warning(
+                "Failed to create KafkaEventConsumer (%s), "
+                "falling back to NoopEventConsumer: %s",
+                settings.kafka_bootstrap_servers, exc,
+            )
+            _event_consumer = NoopEventConsumer()
+    else:
+        from app.shared.messaging.consumer import NoopEventConsumer
+
+        _event_consumer = NoopEventConsumer()
+        logger.info("Event consumer: NoopEventConsumer (event_broker=%s)", broker)
+
+    return _event_consumer
+
+
+def _register_consumer_handlers(settings: Settings) -> None:
+    """Register all module-specific event handlers on the shared consumer.
+
+    Creates handler instances with proper dependencies and registers
+    them via each module's ConsumerSetup class.
+    """
+    consumer = _get_event_consumer(settings)
+    producer = _get_event_producer(settings)
+
+    # ── Compound Risk Consumer ──
+    from app.compound_risk.messaging.consumer import CompoundRiskConsumerSetup
+    from app.compound_risk.messaging.handler import CompoundRiskEventHandler
+    from app.compound_risk.messaging.publisher import CompoundRiskPublisher
+    from app.compound_risk.repositories.session_scoped_compound_risk_repo import (
+        SessionScopedCompoundRiskRepository,
+    )
+    from app.compound_risk.rules.rule_engine import (
+        CompoundRiskRuleEngine,
+        create_default_rules,
+    )
+    from app.compound_risk.services.compound_risk_service import (
+        CompoundRiskAggregationService,
+    )
+    from app.compound_risk.services.explainability_service import (
+        ExplainabilityService,
+    )
+    from app.shared.database.connection import async_session_factory
+
+    cr_rule_engine = CompoundRiskRuleEngine(create_default_rules())
+    cr_explainability = ExplainabilityService()
+    cr_publisher = CompoundRiskPublisher(producer)
+
+    # Consumer runs in a background thread with asyncio.run() per event,
+    # so it needs a session-scoped repository (fresh session per operation)
+    # rather than a request-scoped session from FastAPI's Depends().
+    cr_repo = SessionScopedCompoundRiskRepository(async_session_factory)
+    cr_handler = CompoundRiskEventHandler(
+        aggregation_service=CompoundRiskAggregationService(repository=cr_repo),
+        rule_engine=cr_rule_engine,
+        explainability_service=cr_explainability,
+        publisher=cr_publisher,
+    )
+    cr_setup = CompoundRiskConsumerSetup(consumer, cr_handler)
+    cr_setup.register()
+
+    # ── Hazard Propagation Consumer ──
+    from app.hazard_propagation.messaging.consumer import (
+        HazardPropagationConsumerSetup,
+    )
+    from app.hazard_propagation.messaging.handler import (
+        HazardPropagationEventHandler,
+    )
+    from app.hazard_propagation.messaging.publisher import (
+        HazardPropagationPublisher,
+    )
+    from app.hazard_propagation.services.propagation_engine import (
+        HazardPropagationEngine,
+    )
+
+    graph_repo = _get_graph_repository(settings)
+    hp_engine = HazardPropagationEngine(graph_repo=graph_repo)
+    hp_publisher = HazardPropagationPublisher(producer)
+
+    hp_handler = HazardPropagationEventHandler(
+        propagation_engine=hp_engine,
+        publisher=hp_publisher,
+        graph_repo=graph_repo,
+    )
+    hp_setup = HazardPropagationConsumerSetup(consumer, hp_handler)
+    hp_setup.register()
+
+    logger.info(
+        "All consumer handlers registered: "
+        "compound_risk=%s, hazard_propagation=%s",
+        cr_setup.is_registered, hp_setup.is_registered,
+    )
+
+
+def start_consumers(settings: Settings) -> None:
+    """Start Kafka consumer loop in a background thread.
+
+    Called during application startup (lifespan). The consumer loop
+    runs in a daemon thread so it doesn't block the ASGI event loop
+    and automatically terminates on process exit.
+
+    Safe to call when EVENT_BROKER=noop — will log and return.
+    """
+    global _consumer_thread
+
+    broker = settings.event_broker.lower().strip()
+    if broker != "kafka":
+        logger.info(
+            "Kafka consumers not started (event_broker=%s)", broker,
+        )
+        return
+
+    # Register handlers before starting the loop
+    _register_consumer_handlers(settings)
+
+    consumer = _get_event_consumer(settings)
+    if not consumer.is_enabled or not consumer.is_connected:
+        logger.warning(
+            "Kafka consumer is not connected — skipping consumer start.",
+        )
+        return
+
+    import threading
+
+    _consumer_thread = threading.Thread(
+        target=consumer.start,
+        name="kafka-consumer-loop",
+        daemon=True,
+    )
+    _consumer_thread.start()
+    logger.info(
+        "Kafka consumer loop started in background thread "
+        "(group=%s, thread=%s)",
+        settings.kafka_consumer_group_id,
+        _consumer_thread.name,
+    )
+
+
+def stop_consumers() -> None:
+    """Stop Kafka consumer loop and close the consumer connection.
+
+    Called during application shutdown (lifespan).
+    """
+    global _event_consumer, _consumer_thread
+
+    if _event_consumer is not None:
+        _event_consumer.close()
+        logger.info("Kafka consumer closed.")
+        _event_consumer = None
+
+    if _consumer_thread is not None and _consumer_thread.is_alive():
+        _consumer_thread.join(timeout=5.0)
+        logger.info("Kafka consumer thread joined.")
+        _consumer_thread = None
