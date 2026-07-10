@@ -320,6 +320,40 @@ def get_hazard_propagation_service(
     )
 
 
+# ── Digital Twin Dependencies ──
+
+# Cached TwinStateManager singleton (created once, reused)
+_twin_state_manager = None
+
+
+def _get_twin_state_manager(settings: Settings):
+    """Get or create the TwinStateManager singleton.
+
+    Shares the same GraphRepository singleton used by
+    HazardPropagationService.
+    """
+    global _twin_state_manager
+    if _twin_state_manager is not None:
+        return _twin_state_manager
+
+    from app.digital_twin.services.twin_state_manager import TwinStateManager
+
+    graph_repo = _get_graph_repository(settings)
+    _twin_state_manager = TwinStateManager(graph_repo=graph_repo)
+    logger.info("Digital Twin state manager created")
+    return _twin_state_manager
+
+
+def get_digital_twin_service(
+    settings: Settings = Depends(get_app_settings),
+):
+    """Provide the TwinStateManager for API endpoints.
+
+    Reuses the shared GraphRepository singleton.
+    """
+    return _get_twin_state_manager(settings)
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Kafka Consumer Infrastructure
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -333,12 +367,17 @@ def _get_all_consumer_topics() -> list[str]:
     from app.compound_risk.messaging.consumer import (
         COMPOUND_RISK_SUBSCRIBED_TOPICS,
     )
+    from app.digital_twin.messaging.consumer import (
+        DIGITAL_TWIN_SUBSCRIBED_TOPICS,
+    )
     from app.hazard_propagation.messaging.consumer import (
         HAZARD_PROPAGATION_SUBSCRIBED_TOPICS,
     )
 
     all_topics = list(set(
-        COMPOUND_RISK_SUBSCRIBED_TOPICS + HAZARD_PROPAGATION_SUBSCRIBED_TOPICS
+        COMPOUND_RISK_SUBSCRIBED_TOPICS
+        + HAZARD_PROPAGATION_SUBSCRIBED_TOPICS
+        + DIGITAL_TWIN_SUBSCRIBED_TOPICS
     ))
     return all_topics
 
@@ -463,10 +502,20 @@ def _register_consumer_handlers(settings: Settings) -> None:
     hp_setup = HazardPropagationConsumerSetup(consumer, hp_handler)
     hp_setup.register()
 
+    # ── Digital Twin Consumer ──
+    from app.digital_twin.messaging.consumer import DigitalTwinConsumerSetup
+    from app.digital_twin.messaging.handler import DigitalTwinEventHandler
+
+    dt_state = _get_twin_state_manager(settings)
+    dt_handler = DigitalTwinEventHandler(state_manager=dt_state)
+    dt_setup = DigitalTwinConsumerSetup(consumer, dt_handler)
+    dt_setup.register()
+
     logger.info(
         "All consumer handlers registered: "
-        "compound_risk=%s, hazard_propagation=%s",
+        "compound_risk=%s, hazard_propagation=%s, digital_twin=%s",
         cr_setup.is_registered, hp_setup.is_registered,
+        dt_setup.is_registered,
     )
 
 

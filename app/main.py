@@ -14,6 +14,7 @@ from app.sensor_intelligence.api.router import sensor_intelligence_router
 from app.risk_prediction.api.router import risk_prediction_router
 from app.compound_risk.api.router import compound_risk_router
 from app.hazard_propagation.api.router import hazard_propagation_router
+from app.digital_twin.api.router import digital_twin_router
 
 # Initialize unified logging
 setup_logging()
@@ -77,7 +78,7 @@ def create_app() -> FastAPI:
         description=(
             "Unified backend for the Industrial Safety Intelligence Platform "
             "comprising Sensor Intelligence, Risk Prediction, Compound Risk, "
-            "and Hazard Propagation modules."
+            "Hazard Propagation, and Digital Twin modules."
         ),
         version=settings.app_version,
         lifespan=lifespan,
@@ -93,6 +94,7 @@ def create_app() -> FastAPI:
     application.include_router(risk_prediction_router, prefix=settings.api_prefix)
     application.include_router(compound_risk_router, prefix=settings.api_prefix)
     application.include_router(hazard_propagation_router, prefix=settings.api_prefix)
+    application.include_router(digital_twin_router, prefix=settings.api_prefix)
 
     return application
 
