@@ -1,14 +1,21 @@
 """Digital Twin API endpoints.
 
 Implements:
-  - GET /twin/facility          — facility-wide aggregated state
-  - GET /twin/zones             — all zone states
-  - GET /twin/zones/{zone_id}   — single zone detail
-  - GET /twin/heatmap           — risk heatmap for all zones
+  Phase 1 (live state):
+    - GET /twin/facility          — facility-wide aggregated state
+    - GET /twin/zones             — all zone states
+    - GET /twin/zones/{zone_id}   — single zone detail
+    - GET /twin/heatmap           — risk heatmap for all zones
+
+  Phase 3 (snapshots):
+    - GET /twin/snapshots             — paginated snapshot list
+    - GET /twin/snapshots/{id}        — snapshot detail with zone states
+    - POST /twin/snapshot             — force snapshot creation
+    - DELETE /twin/snapshots/{id}     — delete a snapshot
 
 Follows the same patterns as CompoundRiskEndpoints and
 HazardPropagationEndpoints. All business logic is delegated
-to TwinStateManager.
+to TwinStateManager and SnapshotService.
 """
 
 from __future__ import annotations
@@ -18,7 +25,10 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.dependencies import get_digital_twin_service
+from app.core.dependencies import (
+    get_digital_twin_service,
+    get_snapshot_service,
+)
 from app.digital_twin.domain.exceptions import ZoneNotFoundInTwinError
 from app.digital_twin.schemas.twin_schemas import (
     ActiveHazardSchema,
@@ -233,4 +243,162 @@ async def get_heatmap(
         timestamp=datetime.now(timezone.utc).isoformat(),
         total=len(entries),
         heatmap=entries,
+    )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Phase 3: Snapshot endpoints
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+from app.digital_twin.schemas.twin_snapshot_schemas import (
+    SnapshotCreateResponse,
+    SnapshotDeleteResponse,
+    SnapshotDetailResponse,
+    SnapshotListResponse,
+    SnapshotSummarySchema,
+    ZoneStateSnapshotSchema,
+)
+from app.digital_twin.services.snapshot_service import SnapshotService
+
+
+def _snapshot_to_summary(snap) -> SnapshotSummarySchema:
+    """Convert a FacilitySnapshotModel to a summary schema."""
+    return SnapshotSummarySchema(
+        snapshot_id=snap.snapshot_id,
+        created_at=(
+            snap.created_at.isoformat()
+            if snap.created_at else ""
+        ),
+        facility_health=snap.facility_health,
+        total_zones=snap.total_zones,
+        active_hazards=snap.active_hazards,
+        critical_zones=snap.critical_zones,
+        workers_at_risk=snap.workers_at_risk,
+        events_processed=snap.events_processed,
+        trigger_reason=snap.trigger_reason,
+    )
+
+
+@router.get(
+    "/snapshots",
+    response_model=SnapshotListResponse,
+    summary="List snapshots",
+    description="Returns a paginated list of facility snapshots "
+    "in reverse chronological order.",
+)
+async def list_snapshots(
+    offset: int = 0,
+    limit: int = 50,
+    service: SnapshotService = Depends(get_snapshot_service),
+) -> SnapshotListResponse:
+    """List facility snapshots."""
+    snapshots = await service.list_snapshots(
+        offset=offset, limit=limit,
+    )
+    total = await service.count_snapshots()
+    return SnapshotListResponse(
+        success=True,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        total=total,
+        offset=offset,
+        limit=limit,
+        snapshots=[
+            _snapshot_to_summary(s) for s in snapshots
+        ],
+    )
+
+
+@router.get(
+    "/snapshots/{snapshot_id}",
+    response_model=SnapshotDetailResponse,
+    summary="Get snapshot detail",
+    description="Returns a complete snapshot with all zone states.",
+)
+async def get_snapshot_detail(
+    snapshot_id: str,
+    service: SnapshotService = Depends(get_snapshot_service),
+) -> SnapshotDetailResponse:
+    """Get a snapshot with zone states."""
+    result = await service.get_snapshot_with_zones(snapshot_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "success": False,
+                "error": "RESOURCE_NOT_FOUND",
+                "message": f"Snapshot '{snapshot_id}' not found",
+            },
+        )
+
+    import json
+    snap = result["snapshot"]
+    zone_states = result["zone_states"]
+    payload = json.loads(snap.snapshot_payload)
+
+    return SnapshotDetailResponse(
+        success=True,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        snapshot=_snapshot_to_summary(snap),
+        zone_states=[
+            ZoneStateSnapshotSchema(
+                zone_id=zs.zone_id,
+                risk_score=zs.risk_score,
+                compound_risk_score=zs.compound_risk_score,
+                hazard_count=zs.hazard_count,
+                anomaly_count=zs.anomaly_count,
+                equipment_health=zs.equipment_health,
+                worker_count=zs.worker_count,
+            )
+            for zs in zone_states
+        ],
+        snapshot_payload=payload,
+    )
+
+
+@router.post(
+    "/snapshot",
+    response_model=SnapshotCreateResponse,
+    summary="Create snapshot",
+    description="Force creation of a facility state snapshot.",
+)
+async def create_snapshot(
+    service: SnapshotService = Depends(get_snapshot_service),
+) -> SnapshotCreateResponse:
+    """Manually trigger snapshot creation."""
+    snap = await service.create_snapshot(trigger_reason="manual")
+    return SnapshotCreateResponse(
+        success=True,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        message="Snapshot created successfully",
+        snapshot=_snapshot_to_summary(snap),
+    )
+
+
+@router.delete(
+    "/snapshots/{snapshot_id}",
+    response_model=SnapshotDeleteResponse,
+    summary="Delete snapshot",
+    description="Delete a facility state snapshot.",
+)
+async def delete_snapshot(
+    snapshot_id: str,
+    service: SnapshotService = Depends(get_snapshot_service),
+) -> SnapshotDeleteResponse:
+    """Delete a snapshot by ID."""
+    deleted = await service.delete_snapshot(snapshot_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "success": False,
+                "error": "RESOURCE_NOT_FOUND",
+                "message": f"Snapshot '{snapshot_id}' not found",
+            },
+        )
+    return SnapshotDeleteResponse(
+        success=True,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        message="Snapshot deleted successfully",
+        deleted=True,
     )

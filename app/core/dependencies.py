@@ -354,6 +354,93 @@ def get_digital_twin_service(
     return _get_twin_state_manager(settings)
 
 
+# Cached WebSocketBroadcaster singleton
+_websocket_broadcaster = None
+
+
+def _get_websocket_broadcaster(settings: Settings):
+    """Get or create the WebSocketBroadcaster singleton."""
+    global _websocket_broadcaster
+    if _websocket_broadcaster is not None:
+        return _websocket_broadcaster
+
+    from app.digital_twin.services.websocket_broadcaster import (
+        WebSocketBroadcaster,
+    )
+
+    state_manager = _get_twin_state_manager(settings)
+    _websocket_broadcaster = WebSocketBroadcaster(
+        state_manager=state_manager,
+    )
+    logger.info("WebSocket broadcaster created")
+    return _websocket_broadcaster
+
+
+def get_websocket_broadcaster(
+    settings: Settings = Depends(get_app_settings),
+):
+    """Provide the WebSocketBroadcaster for API endpoints."""
+    return _get_websocket_broadcaster(settings)
+
+
+# Cached SnapshotService singleton
+_snapshot_service = None
+
+
+def _get_snapshot_service(settings: Settings):
+    """Get or create the SnapshotService singleton."""
+    global _snapshot_service
+    if _snapshot_service is not None:
+        return _snapshot_service
+
+    from app.digital_twin.repositories.sqlalchemy_snapshot_repo import (
+        SQLAlchemySnapshotRepository,
+    )
+    from app.digital_twin.services.snapshot_service import SnapshotService
+    from app.shared.database.connection import async_session_factory
+
+    state_manager = _get_twin_state_manager(settings)
+    repo = SQLAlchemySnapshotRepository(async_session_factory)
+    _snapshot_service = SnapshotService(
+        state_manager=state_manager,
+        repository=repo,
+    )
+    logger.info("Snapshot service created")
+    return _snapshot_service
+
+
+def get_snapshot_service(
+    settings: Settings = Depends(get_app_settings),
+):
+    """Provide the SnapshotService for API endpoints."""
+    return _get_snapshot_service(settings)
+
+
+async def recover_twin_from_snapshot(settings: Settings) -> bool:
+    """Recover twin state from the latest snapshot.
+
+    Called during application startup before Kafka consumers begin.
+    Fails gracefully — returns False if no snapshot or on error.
+    """
+    try:
+        service = _get_snapshot_service(settings)
+        recovered = await service.recover_latest_snapshot()
+        if recovered:
+            logger.info("Digital Twin recovered from snapshot")
+        else:
+            logger.info(
+                "No snapshot found — loading topology from graph"
+            )
+            state_manager = _get_twin_state_manager(settings)
+            await state_manager.initialize()
+        return recovered
+    except Exception:
+        logger.exception(
+            "Snapshot recovery failed — Digital Twin starts fresh"
+        )
+        return False
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Kafka Consumer Infrastructure
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -468,7 +555,7 @@ def _register_consumer_handlers(settings: Settings) -> None:
     # rather than a request-scoped session from FastAPI's Depends().
     cr_repo = SessionScopedCompoundRiskRepository(async_session_factory)
     cr_handler = CompoundRiskEventHandler(
-        aggregation_service=CompoundRiskAggregationService(repository=cr_repo),
+        aggregation_service=CompoundRiskAggregationService(repo=cr_repo),
         rule_engine=cr_rule_engine,
         explainability_service=cr_explainability,
         publisher=cr_publisher,
@@ -507,9 +594,19 @@ def _register_consumer_handlers(settings: Settings) -> None:
     from app.digital_twin.messaging.handler import DigitalTwinEventHandler
 
     dt_state = _get_twin_state_manager(settings)
-    dt_handler = DigitalTwinEventHandler(state_manager=dt_state)
+    dt_broadcaster = _get_websocket_broadcaster(settings)
+    dt_snapshot_svc = _get_snapshot_service(settings)
+    dt_handler = DigitalTwinEventHandler(
+        state_manager=dt_state,
+        broadcaster=dt_broadcaster,
+        snapshot_service=dt_snapshot_svc,
+    )
     dt_setup = DigitalTwinConsumerSetup(consumer, dt_handler)
     dt_setup.register()
+
+    # Wire broadcaster into WebSocket endpoint module
+    from app.digital_twin.api.websocket_endpoints import set_broadcaster
+    set_broadcaster(dt_broadcaster)
 
     logger.info(
         "All consumer handlers registered: "

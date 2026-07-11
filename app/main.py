@@ -9,7 +9,11 @@ from fastapi import FastAPI
 from app.core.logging import setup_logging
 from app.core.middleware import setup_middleware
 from app.core.settings import get_settings
-from app.core.dependencies import start_consumers, stop_consumers
+from app.core.dependencies import (
+    start_consumers,
+    stop_consumers,
+    recover_twin_from_snapshot,
+)
 from app.sensor_intelligence.api.router import sensor_intelligence_router
 from app.risk_prediction.api.router import risk_prediction_router
 from app.compound_risk.api.router import compound_risk_router
@@ -50,10 +54,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         from app.risk_prediction.models import risk_prediction_model  # noqa: F401
         from app.compound_risk.models import compound_risk_model  # noqa: F401
+        from app.digital_twin.models import (  # noqa: F401
+            facility_snapshot_model,
+            zone_state_model,
+        )
 
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created/verified")
+
+    # Recover Digital Twin from latest snapshot (before consumers start)
+    try:
+        await recover_twin_from_snapshot(settings)
+    except Exception:
+        logger.exception(
+            "Snapshot recovery failed — Digital Twin starts fresh"
+        )
 
     # Start Kafka consumers (noop if EVENT_BROKER != kafka)
     start_consumers(settings)

@@ -51,3 +51,13 @@ class HeatmapColor(str, Enum):
             return cls.ORANGE
         else:
             return cls.RED
+
+
+class WsChannel(str, Enum):
+    """WebSocket subscription channels for Phase 4."""
+
+    RISK_UPDATES = "risk-updates"
+    SENSOR_DATA = "sensor-data"
+    HAZARD_EVENTS = "hazard-events"
+    TWIN_STATE = "twin-state"
+

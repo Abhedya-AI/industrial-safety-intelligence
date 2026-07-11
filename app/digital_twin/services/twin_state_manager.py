@@ -124,6 +124,32 @@ class TwinStateManager:
             self._initialized = True
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # State Restoration (Phase 3)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def restore_zone(self, zone_state: ZoneState) -> None:
+        """Restore a zone state from a snapshot.
+
+        Used during cold-start recovery. Replaces any existing
+        state for the given zone_id.
+
+        Args:
+            zone_state: The ZoneState to restore.
+        """
+        with self._lock:
+            self._zones[zone_state.zone_id] = zone_state
+            logger.debug(
+                "Restored zone from snapshot: %s", zone_state.zone_id,
+            )
+
+    def restore_events_processed(self, count: int) -> None:
+        """Restore the events_processed counter from a snapshot."""
+        with self._lock:
+            self._events_processed = max(
+                self._events_processed, count,
+            )
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Private helpers
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
